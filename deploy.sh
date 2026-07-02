@@ -114,9 +114,17 @@ fi
 
 # ---------- 7. 防火墙 ----------
 if command -v ufw >/dev/null 2>&1; then
-  say "放行端口 (ufw)"
-  for p in $TCP_PORTS; do ufw allow "${p}/tcp" || true; done
-  for p in $UDP_PORTS; do ufw allow "${p}/udp" || true; done
+  echo "即将用 ufw 放行:  TCP=[$TCP_PORTS]  UDP=[$UDP_PORTS]"
+  DO_FW=$(ask "是否放行以上端口? (y/n)" "y")
+  if [ "$DO_FW" = "y" ]; then
+    say "放行端口 (ufw)"
+    for p in $TCP_PORTS; do ufw allow "${p}/tcp" || true; done
+    for p in $UDP_PORTS; do ufw allow "${p}/udp" || true; done
+  else
+    warn "已跳过 ufw 放行, 请自行确保端口可达"
+  fi
+else
+  warn "未检测到 ufw, 跳过系统防火墙放行"
 fi
 warn "别忘了云厂商安全组也放行上述 TCP + UDP 端口"
 
