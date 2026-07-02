@@ -11,8 +11,9 @@ C_G='\033[32m'; C_Y='\033[33m'; C_R='\033[31m'; C_0='\033[0m'
 say(){ echo -e "${C_G}==>${C_0} $*"; }
 warn(){ echo -e "${C_Y}!! $*${C_0}"; }
 die(){ echo -e "${C_R}xx $*${C_0}" >&2; exit 1; }
-ask(){ local p="$1" d="${2:-}" v; if [ -n "$d" ]; then read -rp "$p [$d]: " v; echo "${v:-$d}"; else read -rp "$p: " v; echo "$v"; fi; }
-asks(){ local p="$1" v; read -rsp "$p: " v; echo >&2; echo "$v"; }  # 隐藏输入(密钥)
+# 从 /dev/tty 读, 这样 `curl ... | bash` 时仍能交互输入 (管道里 stdin=脚本本身)
+ask(){ local p="$1" d="${2:-}" v; if [ -n "$d" ]; then read -rp "$p [$d]: " v </dev/tty; echo "${v:-$d}"; else read -rp "$p: " v </dev/tty; echo "$v"; fi; }
+asks(){ local p="$1" v; read -rsp "$p: " v </dev/tty; echo >&2; echo "$v"; }  # 隐藏输入(密钥)
 
 IMAGE="ghcr.io/kilig-cm/xboard-node:latest"
 DEPLOY_DIR="$HOME/xboard-node"
