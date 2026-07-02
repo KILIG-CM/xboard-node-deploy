@@ -1,0 +1,5 @@
+*.md
+!README.md
+config/
+compose.yaml
+docker-compose.yml
