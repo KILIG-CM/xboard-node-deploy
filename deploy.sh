@@ -175,6 +175,10 @@ services:
     container_name: xboard-node
     restart: always
     network_mode: host
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
     volumes:
       - ./config:/etc/xboard-node
 EOF
@@ -191,26 +195,51 @@ else
   say "Docker 已安装, 跳过"
 fi
 
-# ---------- BBR 加速 ----------
-cur_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "")
-if [ "$cur_cc" = "bbr" ]; then
-  say "BBR 已启用, 跳过"
-else
-  DO_BBR=$(ask "开启 BBR 拥塞控制加速? (y/n)" "y")
-  if [ "$DO_BBR" = "y" ]; then
-    # 单独文件, 幂等 (每次覆盖, 不会重复追加)
-    cat > /etc/sysctl.d/99-bbr.conf <<'EOF'
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
+# ---------- BBR + 网络栈调优 (最优版) ----------
+DO_BBR=$(ask "开启 BBR 并优化网络栈(大缓冲/快握手, 利好 Hy2/QUIC)? (y/n)" "y")
+if [ "$DO_BBR" = "y" ]; then
+  # 单独文件, 幂等 (每次覆盖, 不会重复追加)
+  cat > /etc/sysctl.d/99-net-tune.conf <<'EOF'
+# ---- 拥塞控制: BBR + fq ----
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+# ---- TCP/UDP 大缓冲 (BBR 高带宽 & Hy2/QUIC 关键) ----
+net.core.rmem_max = 67108864
+net.core.wmem_max = 67108864
+net.core.rmem_default = 1048576
+net.core.wmem_default = 1048576
+net.ipv4.tcp_rmem = 4096 87380 67108864
+net.ipv4.tcp_wmem = 4096 65536 67108864
+net.core.netdev_max_backlog = 250000
+net.core.somaxconn = 32768
+# ---- TCP 行为 ----
+net.ipv4.tcp_fastopen = 3
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_notsent_lowat = 16384
+net.ipv4.tcp_max_syn_backlog = 8192
+net.ipv4.tcp_max_tw_buckets = 55000
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 15
+net.ipv4.tcp_keepalive_time = 600
+net.ipv4.tcp_keepalive_intvl = 30
+net.ipv4.tcp_keepalive_probes = 5
+net.ipv4.tcp_syncookies = 1
+# ---- 转发 & 文件句柄 ----
+net.ipv4.ip_forward = 1
+fs.file-max = 1048576
 EOF
-    sysctl --system >/dev/null 2>&1 || true
-    cur_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "")
-    if [ "$cur_cc" = "bbr" ]; then
-      say "BBR 已开启 (当前拥塞控制: $cur_cc)"
-    else
-      warn "BBR 未即时生效 (当前: ${cur_cc:-未知}) — 内核可能过旧(<4.9)或需重启后生效"
-    fi
+  sysctl --system >/dev/null 2>&1 || true
+  cur_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "")
+  cur_qd=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "")
+  if [ "$cur_cc" = "bbr" ]; then
+    say "BBR + 调优已生效 (拥塞控制: $cur_cc, qdisc: $cur_qd)"
+  else
+    warn "BBR 未即时生效 (当前: ${cur_cc:-未知}) — 内核可能过旧(<4.9)或需重启后生效"
   fi
+  # 可用性提示: 内核是否带 bbr 模块
+  av=$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || echo "")
+  echo "  可用拥塞控制算法: ${av:-未知}"
 fi
 
 # ---------- 启动 ----------
