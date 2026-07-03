@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Xboard-Node 交互式部署脚本
-# 在任意新 VPS 上运行, 逐项输入 -> 生成 config -> 装 docker -> 开端口 -> 起容器
+# Xboard-Node 部署脚本
+# 两种模式:
+#   1) 交互输入 —— 一步步问, 自动生成 config.yml
+#   2) 手动填写 —— 生成模板(或用已有的 config.yml), 你自己编辑后再跑, 脚本负责部署
 # 默认配置 = JP 集群 (AnyTLS 48/49/50 + Hy2 51/52, sing-box 单容器)
 # 用法:  curl -fsSL <raw_url>/deploy.sh | bash    或    bash deploy.sh
 # =============================================================================
@@ -18,76 +20,156 @@ asks(){ local p="$1" v; read -rsp "$p: " v </dev/tty; echo >&2; echo "$v"; }  # 
 IMAGE="ghcr.io/kilig-cm/xboard-node:latest"
 DEPLOY_DIR="$HOME/xboard-node"
 CFG_DIR="$DEPLOY_DIR/config"
+CFG_FILE="$CFG_DIR/config.yml"
 
 echo "======================================================================"
 echo "  Xboard-Node 部署向导  (Ctrl-C 退出)"
 echo "======================================================================"
 
-# ---------- 1. 面板 / 密钥 ----------
-PANEL_URL=$(ask "面板地址" "https://sub.kiligt.top")
-PANEL_TOKEN=$(asks "面板通信密钥 token (输入隐藏)")
-[ -n "$PANEL_TOKEN" ] || die "面板 token 不能为空"
-EMAIL=$(ask "证书申请邮箱" "kilig999110@gmail.com")
-KERNEL=$(ask "内核 type (singbox=AnyTLS/Hy2/TUIC, xray=VLESS/Reality)" "singbox")
+# ---------- 0. 选择配置方式 ----------
+echo "请选择配置方式:"
+echo "  1) 交互输入 —— 一步步问, 自动生成 config.yml (推荐)"
+echo "  2) 手动填写 —— 生成模板/用已有的 config.yml, 你自己编辑后再跑"
+MODE=$(ask "输入 1 或 2" "1")
 
-CERT_MODE=$(ask "证书模式 (dns=需要真实证书 / none=Reality 免证书)" "dns")
-CF_TOKEN=""
-if [ "$CERT_MODE" = "dns" ]; then
-  CF_TOKEN=$(asks "Cloudflare API Token (输入隐藏)")
-  [ -n "$CF_TOKEN" ] || die "dns 证书模式必须提供 Cloudflare token"
-fi
-
-# ---------- 2. 节点列表 ----------
-# 格式: node_id:domain:proto   proto ∈ {anytls|hy2|vless}  (vless=Reality 走 xray+none)
+# 默认节点 (JP 集群):  格式 node_id:domain:proto   proto ∈ {anytls|hy2|vless}
 DEFAULT_NODES="48:sern6.kiligt.top:anytls 49:sern7.kiligt.top:anytls 50:sern8.kiligt.top:anytls 51:sern9.kiligt.top:hy2 52:sern10.kiligt.top:hy2"
-echo
-echo "默认节点 (JP 集群):"
-echo "  $DEFAULT_NODES" | tr ' ' '\n' | sed 's/^/    /'
-USE_DEF=$(ask "用默认节点? (y/n)" "y")
-if [ "$USE_DEF" = "y" ]; then
-  NODES="$DEFAULT_NODES"
+
+if [ "$MODE" = "2" ]; then
+  # ============ 手动模式 ============
+  mkdir -p "$CFG_DIR"
+  if [ -f "$CFG_FILE" ]; then
+    say "检测到已有 config.yml: $CFG_FILE —— 将用它继续部署"
+    echo "----- 当前 config.yml (证书 token 隐藏) -----"
+    sed 's/CF_API_TOKEN:.*/CF_API_TOKEN: "***"/' "$CFG_FILE"
+    echo "---------------------------------------------"
+    GO=$(ask "确认用这个配置继续部署? (y/n)" "y")
+    [ "$GO" = "y" ] || die "已取消。编辑好 $CFG_FILE 后重新运行。"
+  else
+    say "生成配置模板: $CFG_FILE"
+    cat > "$CFG_FILE" <<'TPL'
+# ===== Xboard-Node config.yml 模板 (手动填写) =====
+# 填好后重新运行脚本, 选「2) 手动填写」, 会自动检测到本文件并部署。
+# 内核: singbox = AnyTLS/Hy2/TUIC ; xray = VLESS/Reality
+# DNS 证书节点(AnyTLS/Hy2)需要 cert 块; Reality 不需要 cert。
+kernel:
+  type: singbox
+panel:
+  url: https://sub.kiligt.top
+  token: "在这里填面板通信密钥token"
+nodes:
+  - node_id: 48            # anytls - sern6
+    cert:
+      cert_mode: dns
+      domain: sern6.kiligt.top
+      email: kilig999110@gmail.com
+      dns_provider: cloudflare
+      dns_env:
+        CF_API_TOKEN: "在这里填CloudflareAPIToken"
+  - node_id: 49            # anytls - sern7
+    cert:
+      cert_mode: dns
+      domain: sern7.kiligt.top
+      email: kilig999110@gmail.com
+      dns_provider: cloudflare
+      dns_env:
+        CF_API_TOKEN: "在这里填CloudflareAPIToken"
+  - node_id: 50            # anytls - sern8
+    cert:
+      cert_mode: dns
+      domain: sern8.kiligt.top
+      email: kilig999110@gmail.com
+      dns_provider: cloudflare
+      dns_env:
+        CF_API_TOKEN: "在这里填CloudflareAPIToken"
+  - node_id: 51            # hy2 - sern9
+    cert:
+      cert_mode: dns
+      domain: sern9.kiligt.top
+      email: kilig999110@gmail.com
+      dns_provider: cloudflare
+      dns_env:
+        CF_API_TOKEN: "在这里填CloudflareAPIToken"
+  - node_id: 52            # hy2 - sern10
+    cert:
+      cert_mode: dns
+      domain: sern10.kiligt.top
+      email: kilig999110@gmail.com
+      dns_provider: cloudflare
+      dns_env:
+        CF_API_TOKEN: "在这里填CloudflareAPIToken"
+TPL
+    echo
+    say "模板已生成。请编辑它填入真实 token / 域名 / 节点:"
+    echo "    nano $CFG_FILE"
+    echo "填好后重新运行本脚本并再次选「2」即可继续部署。"
+    exit 0
+  fi
 else
-  echo "逐个输入节点, 空行结束。格式  node_id:domain:proto  (proto=anytls|hy2|vless)"
-  NODES=""
-  while true; do
-    line=$(ask "节点" ""); [ -z "$line" ] && break; NODES="$NODES $line"
-  done
-  [ -n "$NODES" ] || die "至少要一个节点"
+  # ============ 交互模式 ============
+  # 1. 面板 / 密钥
+  PANEL_URL=$(ask "面板地址" "https://sub.kiligt.top")
+  PANEL_TOKEN=$(asks "面板通信密钥 token (输入隐藏)")
+  [ -n "$PANEL_TOKEN" ] || die "面板 token 不能为空"
+  EMAIL=$(ask "证书申请邮箱" "kilig999110@gmail.com")
+  KERNEL=$(ask "内核 type (singbox=AnyTLS/Hy2/TUIC, xray=VLESS/Reality)" "singbox")
+  CERT_MODE=$(ask "证书模式 (dns=需要真实证书 / none=Reality 免证书)" "dns")
+  CF_TOKEN=""
+  if [ "$CERT_MODE" = "dns" ]; then
+    CF_TOKEN=$(asks "Cloudflare API Token (输入隐藏)")
+    [ -n "$CF_TOKEN" ] || die "dns 证书模式必须提供 Cloudflare token"
+  fi
+
+  # 2. 节点列表
+  echo
+  echo "默认节点 (JP 集群):"
+  echo "  $DEFAULT_NODES" | tr ' ' '\n' | sed 's/^/    /'
+  USE_DEF=$(ask "用默认节点? (y/n)" "y")
+  if [ "$USE_DEF" = "y" ]; then
+    NODES="$DEFAULT_NODES"
+  else
+    echo "逐个输入节点, 空行结束。格式  node_id:domain:proto  (proto=anytls|hy2|vless)"
+    NODES=""
+    while true; do
+      line=$(ask "节点" ""); [ -z "$line" ] && break; NODES="$NODES $line"
+    done
+    [ -n "$NODES" ] || die "至少要一个节点"
+  fi
+
+  # 3. 生成 config.yml
+  say "生成 $CFG_FILE"
+  mkdir -p "$CFG_DIR"
+  {
+    echo "kernel:"
+    echo "  type: $KERNEL"
+    echo "panel:"
+    echo "  url: $PANEL_URL"
+    echo "  token: $PANEL_TOKEN"
+    echo "nodes:"
+    for n in $NODES; do
+      id="${n%%:*}"; rest="${n#*:}"; domain="${rest%%:*}"; proto="${rest##*:}"
+      echo "  - node_id: $id            # $proto - $domain"
+      if [ "$CERT_MODE" = "dns" ]; then
+        echo "    cert:"
+        echo "      cert_mode: dns"
+        echo "      domain: $domain"
+        echo "      email: $EMAIL"
+        echo "      dns_provider: cloudflare"
+        echo "      dns_env:"
+        echo "        CF_API_TOKEN: \"$CF_TOKEN\""
+      fi
+    done
+  } > "$CFG_FILE"
+  echo "----- config.yml (证书 token 已写入, 下面隐藏) -----"
+  sed 's/CF_API_TOKEN:.*/CF_API_TOKEN: "***"/' "$CFG_FILE"
+  echo "---------------------------------------------------"
 fi
 
-# ---------- 3. 端口 (仅用于防火墙放行) ----------
+# ---------- 端口 (仅用于防火墙放行) ----------
 TCP_PORTS=$(ask "要放行的 TCP 端口(空格分隔, AnyTLS/VLESS)" "2053 2083 2087")
 UDP_PORTS=$(ask "要放行的 UDP 端口(空格分隔, Hy2)" "2096 8443")
 
-# ---------- 4. 生成 config.yml ----------
-say "生成 $CFG_DIR/config.yml"
-mkdir -p "$CFG_DIR"
-{
-  echo "kernel:"
-  echo "  type: $KERNEL"
-  echo "panel:"
-  echo "  url: $PANEL_URL"
-  echo "  token: $PANEL_TOKEN"
-  echo "nodes:"
-  for n in $NODES; do
-    id="${n%%:*}"; rest="${n#*:}"; domain="${rest%%:*}"; proto="${rest##*:}"
-    echo "  - node_id: $id            # $proto - $domain"
-    if [ "$CERT_MODE" = "dns" ]; then
-      echo "    cert:"
-      echo "      cert_mode: dns"
-      echo "      domain: $domain"
-      echo "      email: $EMAIL"
-      echo "      dns_provider: cloudflare"
-      echo "      dns_env:"
-      echo "        CF_API_TOKEN: \"$CF_TOKEN\""
-    fi
-  done
-} > "$CFG_DIR/config.yml"
-echo "----- config.yml (证书 token 已写入, 下面隐藏) -----"
-sed 's/CF_API_TOKEN:.*/CF_API_TOKEN: "***"/' "$CFG_DIR/config.yml"
-echo "---------------------------------------------------"
-
-# ---------- 5. compose 文件 ----------
+# ---------- compose 文件 ----------
 if [ ! -f "$DEPLOY_DIR/compose.yaml" ] && [ ! -f "$DEPLOY_DIR/docker-compose.yml" ]; then
   say "生成 compose.yaml"
   cat > "$DEPLOY_DIR/compose.yaml" <<EOF
@@ -105,7 +187,7 @@ else
   sed -i "s#ghcr.io/cedar2025/xboard-node:latest#$IMAGE#" "$DEPLOY_DIR"/*.y*ml 2>/dev/null || true
 fi
 
-# ---------- 6. 安装 docker ----------
+# ---------- 安装 docker ----------
 if ! command -v docker >/dev/null 2>&1; then
   say "安装 Docker"
   curl -fsSL https://get.docker.com | sh
@@ -113,7 +195,7 @@ else
   say "Docker 已安装, 跳过"
 fi
 
-# ---------- 7. 防火墙 ----------
+# ---------- 防火墙 ----------
 if command -v ufw >/dev/null 2>&1; then
   echo "即将用 ufw 放行:  TCP=[$TCP_PORTS]  UDP=[$UDP_PORTS]"
   DO_FW=$(ask "是否放行以上端口? (y/n)" "y")
@@ -129,7 +211,7 @@ else
 fi
 warn "别忘了云厂商安全组也放行上述 TCP + UDP 端口"
 
-# ---------- 8. 启动 ----------
+# ---------- 启动 ----------
 say "拉镜像 + 启动"
 docker pull "$IMAGE"
 # 老容器可能占端口, 先清掉再起 (换内核时尤其必要)
@@ -137,7 +219,7 @@ docker rm -f xboard-node 2>/dev/null || true
 cd "$DEPLOY_DIR"
 docker compose up -d --force-recreate
 
-# ---------- 9. 自检 ----------
+# ---------- 自检 ----------
 say "容器镜像: $(docker inspect xboard-node --format '{{.Image}}' 2>/dev/null || echo '未起来')"
 say "启动日志 (最后 40 行):"
 docker compose logs --tail=40
