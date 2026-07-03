@@ -219,15 +219,21 @@ detect_ports(){
   UDP_PORTS=$(echo $UDP_PORTS | tr ' ' '\n' | sort -un | tr '\n' ' ' | sed 's/ *$//')
 }
 
-say "等待节点启动并自动检测监听端口 (证书申请可能需要 1~2 分钟)..."
+# 期望的节点数 = config 里 node_id 的条数; 等到全部起来再停 (Hy2 通常比 AnyTLS 晚起)
+EXPECT=$(grep -cE '^[[:space:]]*-[[:space:]]*node_id:' "$CFG_FILE" 2>/dev/null || echo 0)
+say "预计 $EXPECT 个节点; 等待全部启动并检测端口 (证书申请可能 1~2 分钟, 请耐心)..."
 TCP_PORTS=""; UDP_PORTS=""
-for i in $(seq 1 30); do          # 最多轮询 ~150s
+for i in $(seq 1 36); do          # 最多轮询 ~180s
   detect_ports
-  [ -n "$TCP_PORTS$UDP_PORTS" ] && break
+  cnt=$(( $(echo $TCP_PORTS | wc -w) + $(echo $UDP_PORTS | wc -w) ))
+  if [ "$EXPECT" -gt 0 ] && [ "$cnt" -ge "$EXPECT" ]; then break; fi
   sleep 5
 done
+cnt=$(( $(echo $TCP_PORTS | wc -w) + $(echo $UDP_PORTS | wc -w) ))
 
 if [ -n "$TCP_PORTS$UDP_PORTS" ]; then
+  [ "$EXPECT" -gt 0 ] && [ "$cnt" -lt "$EXPECT" ] && \
+    warn "只检测到 $cnt/$EXPECT 个节点端口 —— 可能有节点证书没签下来/没起来, 请查日志; 下面按已检测到的放行。"
   say "检测到监听端口:  TCP=[$TCP_PORTS]  UDP=[$UDP_PORTS]"
 else
   warn "未能自动检测到端口(证书还在申请/节点没起来/日志格式不符), 改为手动输入"
