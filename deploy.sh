@@ -165,10 +165,6 @@ else
   echo "---------------------------------------------------"
 fi
 
-# ---------- 端口 (仅用于防火墙放行) ----------
-TCP_PORTS=$(ask "要放行的 TCP 端口(空格分隔, AnyTLS/VLESS)" "2053 2083 2087")
-UDP_PORTS=$(ask "要放行的 UDP 端口(空格分隔, Hy2)" "2096 8443")
-
 # ---------- compose 文件 ----------
 if [ ! -f "$DEPLOY_DIR/compose.yaml" ] && [ ! -f "$DEPLOY_DIR/docker-compose.yml" ]; then
   say "生成 compose.yaml"
@@ -195,6 +191,50 @@ else
   say "Docker 已安装, 跳过"
 fi
 
+# ---------- 启动 ----------
+say "拉镜像 + 启动"
+docker pull "$IMAGE"
+# 老容器可能占端口, 先清掉再起 (换内核时尤其必要)
+docker rm -f xboard-node 2>/dev/null || true
+cd "$DEPLOY_DIR"
+docker compose up -d --force-recreate
+
+# ---------- 自动检测监听端口 ----------
+# 端口由面板按 node_id 下发, config 里没有; 从容器日志的 "[proto:port] started" 提取,
+# 按协议分 TCP/UDP。 TCP: anytls/vless/trojan/vmess/ss ; UDP: hysteria2/hysteria/tuic
+detect_ports(){
+  local logs proto port
+  TCP_PORTS=""; UDP_PORTS=""
+  logs=$(docker compose logs 2>/dev/null || true)
+  while IFS=: read -r proto port; do
+    [ -z "${port:-}" ] && continue
+    case "$proto" in
+      hysteria2|hysteria|tuic) UDP_PORTS="$UDP_PORTS $port" ;;
+      *)                       TCP_PORTS="$TCP_PORTS $port" ;;
+    esac
+  done < <(echo "$logs" | grep -iE 'started' \
+             | grep -oiE '(anytls|vless|trojan|vmess|shadowsocks|hysteria2|hysteria|tuic):[0-9]+' \
+             | sort -u)
+  TCP_PORTS=$(echo $TCP_PORTS | tr ' ' '\n' | sort -un | tr '\n' ' ' | sed 's/ *$//')
+  UDP_PORTS=$(echo $UDP_PORTS | tr ' ' '\n' | sort -un | tr '\n' ' ' | sed 's/ *$//')
+}
+
+say "等待节点启动并自动检测监听端口 (证书申请可能需要 1~2 分钟)..."
+TCP_PORTS=""; UDP_PORTS=""
+for i in $(seq 1 30); do          # 最多轮询 ~150s
+  detect_ports
+  [ -n "$TCP_PORTS$UDP_PORTS" ] && break
+  sleep 5
+done
+
+if [ -n "$TCP_PORTS$UDP_PORTS" ]; then
+  say "检测到监听端口:  TCP=[$TCP_PORTS]  UDP=[$UDP_PORTS]"
+else
+  warn "未能自动检测到端口(证书还在申请/节点没起来/日志格式不符), 改为手动输入"
+  TCP_PORTS=$(ask "要放行的 TCP 端口(空格分隔, AnyTLS/VLESS)" "2053 2083 2087")
+  UDP_PORTS=$(ask "要放行的 UDP 端口(空格分隔, Hy2)" "2096 8443")
+fi
+
 # ---------- 防火墙 ----------
 if command -v ufw >/dev/null 2>&1; then
   echo "即将用 ufw 放行:  TCP=[$TCP_PORTS]  UDP=[$UDP_PORTS]"
@@ -210,14 +250,6 @@ else
   warn "未检测到 ufw, 跳过系统防火墙放行"
 fi
 warn "别忘了云厂商安全组也放行上述 TCP + UDP 端口"
-
-# ---------- 启动 ----------
-say "拉镜像 + 启动"
-docker pull "$IMAGE"
-# 老容器可能占端口, 先清掉再起 (换内核时尤其必要)
-docker rm -f xboard-node 2>/dev/null || true
-cd "$DEPLOY_DIR"
-docker compose up -d --force-recreate
 
 # ---------- 自检 ----------
 say "容器镜像: $(docker inspect xboard-node --format '{{.Image}}' 2>/dev/null || echo '未起来')"
