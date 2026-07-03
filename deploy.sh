@@ -191,6 +191,28 @@ else
   say "Docker 已安装, 跳过"
 fi
 
+# ---------- BBR 加速 ----------
+cur_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "")
+if [ "$cur_cc" = "bbr" ]; then
+  say "BBR 已启用, 跳过"
+else
+  DO_BBR=$(ask "开启 BBR 拥塞控制加速? (y/n)" "y")
+  if [ "$DO_BBR" = "y" ]; then
+    # 单独文件, 幂等 (每次覆盖, 不会重复追加)
+    cat > /etc/sysctl.d/99-bbr.conf <<'EOF'
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
+    sysctl --system >/dev/null 2>&1 || true
+    cur_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "")
+    if [ "$cur_cc" = "bbr" ]; then
+      say "BBR 已开启 (当前拥塞控制: $cur_cc)"
+    else
+      warn "BBR 未即时生效 (当前: ${cur_cc:-未知}) — 内核可能过旧(<4.9)或需重启后生效"
+    fi
+  fi
+fi
+
 # ---------- 启动 ----------
 say "拉镜像 + 启动"
 docker pull "$IMAGE"
